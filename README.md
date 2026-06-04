@@ -2,6 +2,11 @@
 
 A sleek, Apple-style black notch that lives at the top of every display — and holds your screenshots.
 
+![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black) ![Swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![v0.1.0](https://img.shields.io/badge/release-v0.1.0-4dd9ff) ![MIT](https://img.shields.io/badge/license-MIT-green)
+
+**Status: live** — running as a LaunchAgent, shelving screenshots since day one.
+**[→ interactive demo](https://casterlygit.github.io/ledge/)**
+
 Native AppKit, zero dependencies, zero TCC prompts. One binary, ~700 lines of Swift.
 
 ## What it does
@@ -50,6 +55,14 @@ DistributedNotificationCenter.default().postNotificationName(
   NSNotification.Name("com.casterly.ledge.debug"), object: "expand",  // expand|collapse|peek
   userInfo: nil, deliverImmediately: true)' | swift -
 ```
+
+## Roadmap
+
+- [ ] Screen-recording (`.mov`) thumbnails via AVFoundation
+- [ ] Vertical scroll wheel → horizontal rail scroll
+- [ ] Pin/favorite items that survive the 40-item prune
+- [ ] Drag-session smoke tests via synthesized CGEvents
+- [ ] Multi-select drag (band-select tiles, drag as a group)
 
 ## Uninstall
 
