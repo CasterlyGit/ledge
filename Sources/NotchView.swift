@@ -13,6 +13,11 @@ final class NotchView: NSView {
     private var highlight = false { didSet { needsDisplay = true } }
     private var trackingArea: NSTrackingArea?
 
+    // Dictation HUD: lives in the notch strip itself (no gallery expand).
+    private let statusSpinner = NSProgressIndicator()
+    private let statusLabel = NSTextField(labelWithString: "")
+    private var statusActive = false
+
     init(frame: NSRect, topHeight: CGFloat) {
         self.topHeight = topHeight
         super.init(frame: frame)
@@ -21,6 +26,7 @@ final class NotchView: NSView {
         types += [.fileURL, .png, .tiff]
         registerForDraggedTypes(types)
         setupRail()
+        setupStatus()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -37,7 +43,7 @@ final class NotchView: NSView {
         trackingArea = t
     }
 
-    override func mouseEntered(with event: NSEvent) { controller?.expand() }
+    override func mouseEntered(with event: NSEvent) { controller?.hoverBegan() }
     override func mouseExited(with event: NSEvent) { controller?.scheduleCollapse() }
 
     // MARK: drawing
@@ -111,6 +117,53 @@ final class NotchView: NSView {
         addSubview(emptyLabel)
     }
 
+    // MARK: dictation status HUD (driven by com.casterly.ledge.status)
+
+    private func setupStatus() {
+        statusSpinner.style = .spinning
+        statusSpinner.controlSize = .small
+        statusSpinner.isIndeterminate = true
+        statusSpinner.isDisplayedWhenStopped = false
+        statusSpinner.appearance = NSAppearance(named: .darkAqua)  // light spinner on black
+        statusSpinner.alphaValue = 0
+        addSubview(statusSpinner)
+
+        statusLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        statusLabel.textColor = NSColor(calibratedRed: 0.3, green: 0.85, blue: 1.0, alpha: 1)  // cyan
+        statusLabel.alphaValue = 0
+        addSubview(statusLabel)
+    }
+
+    /// Show a one-word HUD in the notch strip: "listening" → spinner + "Listening",
+    /// "transcribing" → "Transcribing…", anything else → hide. Never expands the gallery.
+    func setStatus(_ state: String) {
+        let text: String?
+        switch state {
+        case "listening":    text = "Listening"
+        case "transcribing": text = "Transcribing…"
+        default:             text = nil
+        }
+        statusActive = (text != nil)
+        needsLayout = true
+        if let text {
+            statusLabel.stringValue = text
+            statusSpinner.startAnimation(nil)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.18
+                statusSpinner.animator().alphaValue = 1
+                statusLabel.animator().alphaValue = 1
+            }
+        } else {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.18
+                statusSpinner.animator().alphaValue = 0
+                statusLabel.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                if self?.statusActive == false { self?.statusSpinner.stopAnimation(nil) }
+            })
+        }
+    }
+
     override func layout() {
         super.layout()
         let pad: CGFloat = 14
@@ -120,6 +173,16 @@ final class NotchView: NSView {
         emptyLabel.sizeToFit()
         emptyLabel.frame.origin = NSPoint(x: bounds.midX - emptyLabel.frame.width / 2,
                                           y: pad + railH / 2 - emptyLabel.frame.height / 2)
+
+        // status HUD: centered in the top notch-strip band (works collapsed or expanded)
+        statusLabel.sizeToFit()
+        let sp: CGFloat = 14, gap: CGFloat = 6
+        let groupW = sp + gap + statusLabel.frame.width
+        let originX = bounds.midX - groupW / 2
+        let bandMidY = bounds.maxY - topHeight / 2
+        statusSpinner.frame = NSRect(x: originX, y: bandMidY - sp / 2, width: sp, height: sp)
+        statusLabel.frame.origin = NSPoint(x: originX + sp + gap,
+                                           y: bandMidY - statusLabel.frame.height / 2)
     }
 
     /// Called inside the controller's animation group.

@@ -15,6 +15,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(debugCommand(_:)),
             name: NSNotification.Name("com.casterly.ledge.debug"), object: nil)
+        // dictation bridge: laptop-dictation posts listening/transcribing/idle here.
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(statusCommand(_:)),
+            name: NSNotification.Name("com.casterly.ledge.status"), object: nil)
+    }
+
+    @objc private func statusCommand(_ note: Notification) {
+        let state = (note.object as? String) ?? "idle"
+        DispatchQueue.main.async { self.controllers.forEach { $0.setStatus(state) } }
     }
 
     @objc private func screensChanged() { rebuild() }
