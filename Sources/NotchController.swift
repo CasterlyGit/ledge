@@ -183,6 +183,14 @@ final class NotchController: NSObject {
         notchView.setStatus(state)
     }
 
+    /// Live-set the notch fill from a spoken/typed color command. A brief peek
+    /// makes the change visible even when the notch is minimized into the bezel.
+    func setNotchColor(_ color: NSColor) {
+        notchView.notchColor = color
+        if stage == .minimized { setStage(.notch) }
+        scheduleCollapse(after: 1.4)
+    }
+
     /// Auto-expand briefly (new capture landed), then retract unless hovered.
     func peek() {
         expand()

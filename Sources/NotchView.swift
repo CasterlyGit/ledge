@@ -6,6 +6,10 @@ final class NotchView: NSView {
     weak var controller: NotchController?
     var expanded = false { didSet { needsDisplay = true } }
 
+    /// Live notch fill. Default is the hardware black; a spoken "notch <color>"
+    /// command (via NotchController → AppDelegate) sets this and redraws instantly.
+    var notchColor: NSColor = .black { didSet { needsDisplay = true } }
+
     private let topHeight: CGFloat
     private let railScroll = NSScrollView()
     private let railStack = NSStackView()
@@ -50,7 +54,7 @@ final class NotchView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let path = notchPath(in: bounds)
-        NSColor.black.setFill()
+        notchColor.setFill()
         path.fill()
         if highlight {
             NSColor(calibratedRed: 0.3, green: 0.85, blue: 1.0, alpha: 0.16).setFill()
