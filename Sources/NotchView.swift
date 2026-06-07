@@ -14,6 +14,8 @@ final class NotchView: NSView {
     private let railScroll = NSScrollView()
     private let railStack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "⇧⌘3 to capture  ·  drop images here")
+    private let countLabel = NSTextField(labelWithString: "")
+    private let hintLabel = NSTextField(labelWithString: "click copy · 2× open · ⌥ grab text · drag out")
     private var highlight = false { didSet { needsDisplay = true } }
     private var trackingArea: NSTrackingArea?
 
@@ -119,6 +121,17 @@ final class NotchView: NSView {
         emptyLabel.font = .systemFont(ofSize: 12, weight: .medium)
         emptyLabel.alphaValue = 0
         addSubview(emptyLabel)
+
+        // expanded-only chrome in the notch strip band: count (right), hints (left)
+        countLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
+        countLabel.textColor = NSColor(calibratedRed: 0.3, green: 0.85, blue: 1.0, alpha: 0.8)
+        countLabel.alphaValue = 0
+        addSubview(countLabel)
+
+        hintLabel.font = .systemFont(ofSize: 9, weight: .medium)
+        hintLabel.textColor = NSColor(calibratedWhite: 1, alpha: 0.28)
+        hintLabel.alphaValue = 0
+        addSubview(hintLabel)
     }
 
     // MARK: dictation status HUD (driven by com.casterly.ledge.status)
@@ -187,12 +200,21 @@ final class NotchView: NSView {
         statusSpinner.frame = NSRect(x: originX, y: bandMidY - sp / 2, width: sp, height: sp)
         statusLabel.frame.origin = NSPoint(x: originX + sp + gap,
                                            y: bandMidY - statusLabel.frame.height / 2)
+
+        countLabel.sizeToFit()
+        countLabel.frame.origin = NSPoint(x: bounds.maxX - countLabel.frame.width - 24,
+                                          y: bandMidY - countLabel.frame.height / 2)
+        hintLabel.sizeToFit()
+        hintLabel.frame.origin = NSPoint(x: 24, y: bandMidY - hintLabel.frame.height / 2)
     }
 
     /// Called inside the controller's animation group.
     func setRailVisible(_ visible: Bool) {
+        let empty = ShelfStore.shared.items.isEmpty
         railScroll.animator().alphaValue = visible ? 1 : 0
-        emptyLabel.animator().alphaValue = (visible && ShelfStore.shared.items.isEmpty) ? 1 : 0
+        emptyLabel.animator().alphaValue = (visible && empty) ? 1 : 0
+        countLabel.animator().alphaValue = (visible && !empty) ? 1 : 0
+        hintLabel.animator().alphaValue = (visible && !empty) ? 1 : 0
     }
 
     func reloadRail() {
@@ -203,8 +225,15 @@ final class NotchView: NSView {
         for item in ShelfStore.shared.items {
             railStack.addArrangedSubview(ShelfItemView(item: item))
         }
+        let n = ShelfStore.shared.items.count
+        let pins = ShelfStore.shared.pinnedCount
+        countLabel.stringValue = n == 0 ? "" :
+            (pins > 0 ? "\(n) · \(pins) pinned" : "\(n) item\(n == 1 ? "" : "s")")
+        needsLayout = true
         if expanded {
-            emptyLabel.alphaValue = ShelfStore.shared.items.isEmpty ? 1 : 0
+            emptyLabel.alphaValue = n == 0 ? 1 : 0
+            countLabel.alphaValue = n == 0 ? 0 : 1
+            hintLabel.alphaValue = n == 0 ? 0 : 1
         }
         railScroll.contentView.scroll(to: .zero)
         railScroll.reflectScrolledClipView(railScroll.contentView)
@@ -279,7 +308,7 @@ final class NotchView: NSView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let m = NSMenu()
         m.addItem(withTitle: "Open Shelf Folder", action: #selector(openFolder), keyEquivalent: "").target = self
-        m.addItem(withTitle: "Clear All", action: #selector(clearAll), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Clear All (keeps pinned)", action: #selector(clearAll), keyEquivalent: "").target = self
         m.addItem(.separator())
         m.addItem(withTitle: "Quit Ledge", action: #selector(quit), keyEquivalent: "").target = self
         return m
@@ -290,13 +319,19 @@ final class NotchView: NSView {
     @objc private func quit() { NSApp.terminate(nil) }
 }
 
-/// One thumbnail in the rail. Click = copy to clipboard, drag = drag the file
-/// out (Terminal gets the path, image apps get the image), right-click = menu.
+/// One thumbnail in the rail. Click = copy to clipboard, double-click = open,
+/// ⌥-click = OCR text to clipboard, drag = drag the file out (Terminal gets the
+/// path, image apps get the image), dwell = full-size preview, right-click = menu.
 final class ShelfItemView: NSView, NSDraggingSource {
     private let item: ShelfItem
     private let imageView = NSImageView()
+    private let pinBadge = NSImageView()
     private var mouseDownEvent: NSEvent?
     private var widthConstraint: NSLayoutConstraint?
+    private var previewTimer: Timer?
+    private var preview: NSPopover?
+    private static weak var activePreview: NSPopover?
+    private var tileTrackingArea: NSTrackingArea?
 
     init(item: ShelfItem) {
         self.item = item
@@ -315,6 +350,16 @@ final class ShelfItemView: NSView, NSDraggingSource {
         imageView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(imageView)
 
+        pinBadge.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "pinned")
+        pinBadge.symbolConfiguration = .init(pointSize: 9, weight: .bold)
+        pinBadge.contentTintColor = NSColor(calibratedRed: 0.3, green: 0.85, blue: 1.0, alpha: 1)
+        pinBadge.wantsLayer = true
+        pinBadge.layer?.backgroundColor = NSColor(calibratedWhite: 0, alpha: 0.65).cgColor
+        pinBadge.layer?.cornerRadius = 8
+        pinBadge.translatesAutoresizingMaskIntoConstraints = false
+        pinBadge.isHidden = !ShelfStore.shared.isPinned(item)
+        addSubview(pinBadge)
+
         translatesAutoresizingMaskIntoConstraints = false
         let h: CGFloat = 104
         let wc = widthAnchor.constraint(equalToConstant: 130)
@@ -326,6 +371,10 @@ final class ShelfItemView: NSView, NSDraggingSource {
             imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
             imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
             imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            pinBadge.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            pinBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+            pinBadge.widthAnchor.constraint(equalToConstant: 16),
+            pinBadge.heightAnchor.constraint(equalToConstant: 16),
         ])
 
         // cache hit completes synchronously; cold decode lands a beat later
@@ -347,9 +396,90 @@ final class ShelfItemView: NSView, NSDraggingSource {
         return bounds.contains(p) ? self : nil
     }
 
+    // MARK: hover preview (dwell 0.45s → full-size popover)
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = tileTrackingArea { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: .zero,
+                               options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                               owner: self, userInfo: nil)
+        addTrackingArea(t)
+        tileTrackingArea = t
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        previewTimer?.invalidate()
+        previewTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self] _ in
+            self?.showPreview()
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        previewTimer?.invalidate()
+        closePreview()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { previewTimer?.invalidate(); closePreview() }
+    }
+
+    private func showPreview() {
+        guard preview == nil, window != nil, notchController?.isExpanded == true,
+              let img = NSImage(contentsOf: item.url) else { return }
+        let maxW: CGFloat = 480, maxH: CGFloat = 300
+        let scale = min(maxW / max(img.size.width, 1), maxH / max(img.size.height, 1), 1)
+        let w = max(140, img.size.width * scale), h = max(90, img.size.height * scale)
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: w + 16, height: h + 36))
+        let iv = NSImageView(frame: NSRect(x: 8, y: 28, width: w, height: h))
+        iv.image = img
+        iv.imageScaling = .scaleProportionallyUpOrDown
+        container.addSubview(iv)
+        let caption = NSTextField(labelWithString: previewCaption(for: img))
+        caption.font = .systemFont(ofSize: 10, weight: .medium)
+        caption.textColor = .secondaryLabelColor
+        caption.lineBreakMode = .byTruncatingMiddle
+        caption.frame = NSRect(x: 8, y: 7, width: w, height: 14)
+        caption.alignment = .center
+        container.addSubview(caption)
+
+        let vc = NSViewController()
+        vc.view = container
+        let p = NSPopover()
+        p.contentViewController = vc
+        p.behavior = .semitransient
+        p.animates = false
+        p.appearance = NSAppearance(named: .vibrantDark)
+        Self.activePreview?.close()
+        p.show(relativeTo: bounds, of: self, preferredEdge: .minY)
+        Self.activePreview = p
+        preview = p
+    }
+
+    private func closePreview() {
+        preview?.close()
+        preview = nil
+    }
+
+    private func previewCaption(for img: NSImage) -> String {
+        var dims = ""
+        if let rep = img.representations.first {
+            dims = "\(rep.pixelsWide)×\(rep.pixelsHigh)"
+        }
+        let bytes = (try? item.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return [item.url.lastPathComponent, dims, size].filter { !$0.isEmpty }.joined(separator: "  ·  ")
+    }
+
     // MARK: click vs drag
 
-    override func mouseDown(with event: NSEvent) { mouseDownEvent = event }
+    override func mouseDown(with event: NSEvent) {
+        previewTimer?.invalidate()
+        closePreview()
+        mouseDownEvent = event
+    }
 
     override func mouseDragged(with event: NSEvent) {
         guard let down = mouseDownEvent else { return }
@@ -363,17 +493,28 @@ final class ShelfItemView: NSView, NSDraggingSource {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if mouseDownEvent != nil {
-            ShelfStore.shared.copyToPasteboard(item)
-            flashCopied()
+        defer { mouseDownEvent = nil }
+        guard mouseDownEvent != nil else { return }
+        if event.clickCount == 2 {                       // double-click = open
+            NSWorkspace.shared.open(item.url)
+            return
         }
-        mouseDownEvent = nil
+        if event.modifierFlags.contains(.option) {       // ⌥-click = OCR text
+            copyText()
+            return
+        }
+        ShelfStore.shared.copyToPasteboard(item)
+        flashCopied()
     }
 
     private func flashCopied() {
+        flash(NSColor(calibratedRed: 0.3, green: 0.85, blue: 1.0, alpha: 0.9))
+    }
+
+    private func flash(_ color: NSColor) {
         guard let layer else { return }
         let anim = CABasicAnimation(keyPath: "borderColor")
-        anim.fromValue = NSColor(calibratedRed: 0.3, green: 0.85, blue: 1.0, alpha: 0.9).cgColor
+        anim.fromValue = color.cgColor
         anim.toValue = layer.borderColor
         anim.duration = 0.7
         layer.add(anim, forKey: "copiedFlash")
@@ -403,8 +544,16 @@ final class ShelfItemView: NSView, NSDraggingSource {
     // MARK: context menu
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        previewTimer?.invalidate()
+        closePreview()
         let m = NSMenu()
         m.addItem(withTitle: "Copy", action: #selector(copyItem), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Copy Text (OCR)", action: #selector(copyTextAction), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Open", action: #selector(openItem), keyEquivalent: "").target = self
+        m.addItem(.separator())
+        let pinTitle = ShelfStore.shared.isPinned(item) ? "Unpin" : "Pin"
+        m.addItem(withTitle: pinTitle, action: #selector(togglePin), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Share…", action: #selector(share), keyEquivalent: "").target = self
         m.addItem(withTitle: "Reveal in Finder", action: #selector(reveal), keyEquivalent: "").target = self
         m.addItem(.separator())
         m.addItem(withTitle: "Delete", action: #selector(deleteItem), keyEquivalent: "").target = self
@@ -412,6 +561,23 @@ final class ShelfItemView: NSView, NSDraggingSource {
     }
 
     @objc private func copyItem() { ShelfStore.shared.copyToPasteboard(item); flashCopied() }
+    @objc private func copyTextAction() { copyText() }
+    @objc private func openItem() { NSWorkspace.shared.open(item.url) }
+    @objc private func togglePin() { ShelfStore.shared.togglePin(item) }
     @objc private func reveal() { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
     @objc private func deleteItem() { ShelfStore.shared.delete(item) }
+
+    @objc private func share() {
+        let picker = NSSharingServicePicker(items: [item.url])
+        picker.show(relativeTo: bounds, of: self, preferredEdge: .minY)
+    }
+
+    /// OCR the image, put recognized text on the clipboard. Green flash = got
+    /// text, red flash = none found.
+    private func copyText() {
+        ShelfStore.shared.copyText(of: item) { [weak self] ok in
+            self?.flash(ok ? NSColor(calibratedRed: 0.35, green: 0.95, blue: 0.55, alpha: 0.95)
+                           : NSColor(calibratedRed: 0.95, green: 0.35, blue: 0.35, alpha: 0.95))
+        }
+    }
 }

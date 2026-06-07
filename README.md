@@ -17,11 +17,18 @@ Native AppKit, zero dependencies, zero TCC prompts. One binary, ~700 lines of Sw
 - **Drag out** — drag any thumbnail into Terminal (inserts the path), Finder, Slack, anywhere. Standard file-URL drag.
 - **Drag in** — drop images from Finder, browsers (file promises), or raw image data onto the notch; it shelves them *and* puts them on the clipboard.
 - **Click to copy** — click a thumbnail → file URL + image data on the clipboard, cyan flash confirms.
-- **Right-click** — per-item: Copy / Reveal in Finder / Delete. On the notch: Open Shelf Folder / Clear All / Quit.
+- **⌥-click to grab text** — Vision OCR runs on the image; recognized text lands on the clipboard. Green flash = got text, red = none found. Screenshot of an error message → paste the actual string.
+- **Double-click to open** — full image in Preview (or your default app).
+- **Hover preview** — dwell 0.45s on a tile → full-size popover with filename, pixel dimensions, and file size. No more squinting at 104px thumbnails.
+- **📌 Pinning** — pin a capture and it sorts first, survives the 40-item prune, and survives Clear All. Pins persist across restarts.
+- **Share** — right-click → Share… → AirDrop / Messages / Mail / anything in the system share sheet.
+- **Live count** — expanded band shows `N items · M pinned` on the right, interaction hints on the left.
+- **Right-click** — per-item: Copy / Copy Text (OCR) / Open / Pin / Share… / Reveal in Finder / Delete. On the notch: Open Shelf Folder / Clear All (keeps pinned) / Quit.
 
 ## Numbers
 
-- Shelf cap: 40 items (oldest pruned, disk included)
+- Shelf cap: 40 items (oldest unpinned pruned, disk included; pinned never age out)
+- OCR: Vision `VNRecognizeTextRequest` accurate mode, off-main — ~2,300 chars off a full-screen capture in one pass
 - Thumbnail decode: off-main, ≤380px, cached — hover stays at 60fps with a cold rail
 - Watchers: 1 dispatch-source fd on the screenshot dir + 0.6s pasteboard poll (runs in `.common` mode, survives drag loops)
 - Panel level: `mainMenu + 3`, joins all Spaces, shows over fullscreen apps

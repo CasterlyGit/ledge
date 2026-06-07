@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import Vision
 
 struct ShelfItem: Equatable {
     let url: URL
@@ -20,8 +21,9 @@ final class ShelfStore {
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Ledge/shelf", isDirectory: true)
 
-    private(set) var items: [ShelfItem] = []   // newest first
+    private(set) var items: [ShelfItem] = []   // pinned first, then newest first
     private var thumbCache: [URL: NSImage] = [:]
+    private var pinnedNames: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "LedgePinned") ?? [])
 
     private let nameFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -39,9 +41,39 @@ final class ShelfStore {
             guard Self.imageExts.contains(url.pathExtension.lowercased()) else { return nil }
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return ShelfItem(url: url, date: date)
-        }.sorted { $0.date > $1.date }
+        }
+        // drop pins whose files are gone (deleted outside Ledge)
+        pinnedNames.formIntersection(Set(items.map { $0.url.lastPathComponent }))
+        persistPins()
+        sortItems()
         prune()
-        NSLog("Ledge: loaded \(items.count) shelf item(s)")
+        NSLog("Ledge: loaded \(items.count) shelf item(s), \(pinnedNames.count) pinned")
+    }
+
+    // MARK: pinning — pinned items sort first, survive prune and Clear
+
+    func isPinned(_ item: ShelfItem) -> Bool { pinnedNames.contains(item.url.lastPathComponent) }
+
+    var pinnedCount: Int { items.filter { isPinned($0) }.count }
+
+    func togglePin(_ item: ShelfItem) {
+        let name = item.url.lastPathComponent
+        if pinnedNames.remove(name) == nil { pinnedNames.insert(name) }
+        persistPins()
+        sortItems()
+        NotificationCenter.default.post(name: .shelfChanged, object: nil)
+    }
+
+    private func persistPins() {
+        UserDefaults.standard.set(Array(pinnedNames), forKey: "LedgePinned")
+    }
+
+    private func sortItems() {
+        items.sort { a, b in
+            let pa = isPinned(a), pb = isPinned(b)
+            if pa != pb { return pa }
+            return a.date > b.date
+        }
     }
 
     /// Copy an external file into the shelf.
@@ -78,6 +110,7 @@ final class ShelfStore {
         let item = ShelfItem(url: url, date: Date())
         items.removeAll { $0.url == url }
         items.insert(item, at: 0)
+        sortItems()
         prune()
         if toClipboard { copyToPasteboard(item) }
         NSLog("Ledge: shelved \(url.lastPathComponent)")
@@ -89,13 +122,17 @@ final class ShelfStore {
         try? FileManager.default.removeItem(at: item.url)
         thumbCache[item.url] = nil
         items.removeAll { $0 == item }
+        if pinnedNames.remove(item.url.lastPathComponent) != nil { persistPins() }
         NotificationCenter.default.post(name: .shelfChanged, object: nil)
     }
 
+    /// Clear everything except pinned items.
     func clear() {
-        for it in items { try? FileManager.default.removeItem(at: it.url) }
-        items = []
-        thumbCache = [:]
+        for it in items where !isPinned(it) {
+            try? FileManager.default.removeItem(at: it.url)
+            thumbCache[it.url] = nil
+        }
+        items = items.filter { isPinned($0) }
         NotificationCenter.default.post(name: .shelfChanged, object: nil)
     }
 
@@ -134,10 +171,45 @@ final class ShelfStore {
     }
 
     private func prune() {
-        while items.count > Self.maxItems {
-            let last = items.removeLast()
-            thumbCache[last.url] = nil
-            try? FileManager.default.removeItem(at: last.url)
+        var overflow = items.count - Self.maxItems
+        var idx = items.count - 1
+        while overflow > 0 && idx >= 0 {
+            let it = items[idx]
+            if !isPinned(it) {   // pinned items never age out
+                try? FileManager.default.removeItem(at: it.url)
+                thumbCache[it.url] = nil
+                items.remove(at: idx)
+                overflow -= 1
+            }
+            idx -= 1
+        }
+    }
+
+    // MARK: OCR — recognize text in an image and put it on the clipboard
+
+    func copyText(of item: ShelfItem, completion: @escaping (Bool) -> Void) {
+        let url = item.url
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+                DispatchQueue.main.async { completion(false) }; return
+            }
+            let req = VNRecognizeTextRequest()
+            req.recognitionLevel = .accurate
+            req.usesLanguageCorrection = true
+            try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
+            let text = (req.results ?? [])
+                .compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: "\n")
+            DispatchQueue.main.async {
+                guard !text.isEmpty else { completion(false); return }
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(text, forType: .string)
+                ClipboardWatcher.shared.ignoreChange(pb.changeCount)
+                NSLog("Ledge: OCR copied \(text.count) chars from \(url.lastPathComponent)")
+                completion(true)
+            }
         }
     }
 

@@ -16,10 +16,17 @@ after rebuild). Logs: `/tmp/com.casterly.ledge.err.log`.
   auto-collapse
 - `NotchView.swift` — draws notch silhouette (flared top corners via bezier,
   control points at the corner), hosts horizontal NSStackView rail in NSScrollView,
-  drop target (file URLs → promises → raw data), context menus. `ShelfItemView` =
-  thumbnail tile, click=copy / drag=NSDraggingSource file-URL / right-click menu
+  drop target (file URLs → promises → raw data), context menus; expanded band shows
+  hint text (left) + item/pin count (right). `ShelfItemView` = thumbnail tile:
+  click=copy / 2×click=open / ⌥click=OCR-copy-text / drag=NSDraggingSource file-URL /
+  dwell 0.45s=full-size NSPopover preview (semitransient, vibrantDark, caption with
+  dims+size) / right-click menu (Copy, Copy Text OCR, Open, Pin/Unpin, Share…,
+  Reveal, Delete); cyan pin.fill badge top-right when pinned
 - `ShelfStore.swift` — singleton; shelf dir `~/Library/Application Support/Ledge/shelf`,
-  newest-first, cap 40, off-main thumbnail decode cached on main
+  pinned-first then newest-first, cap 40 (pinned never pruned, Clear keeps pinned),
+  pins persist as filenames in UserDefaults `LedgePinned` (stale pins dropped on load),
+  off-main thumbnail decode cached on main; `copyText(of:)` = Vision
+  VNRecognizeTextRequest off-main → string to pasteboard (self-echo guarded)
 - `Watchers.swift` — `ScreenshotWatcher` (DispatchSource on screencapture location dir,
   resolved from `com.apple.screencapture location` pref, default `~/Pictures/Screenshots`)
   + `ClipboardWatcher` (0.6s timer in `.common` mode, raw-image-only, `ignoreChange`
