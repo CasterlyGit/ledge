@@ -25,8 +25,12 @@ final class ShelfStore {
     private var thumbCache: [URL: NSImage] = [:]
     private var pinnedNames: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "LedgePinned") ?? [])
 
+    // OCR text cache (filename → recognized text), for full-text search. Persisted.
+    private var ocrCache: [String: String] = (UserDefaults.standard.dictionary(forKey: "LedgeOCRText") as? [String: String]) ?? [:]
+    private var ocrInFlight: Set<String> = []
+
     // Search & filter state
-    var searchText: String = "" { didSet { notifyFilterChanged() } }
+    var searchText: String = "" { didSet { notifyFilterChanged(); ensureOCRForSearch() } }
     enum DateFilter { case all, today, week }
     var dateFilter: DateFilter = .all { didSet { notifyFilterChanged() } }
     var showPinnedOnly: Bool = false { didSet { notifyFilterChanged() } }
@@ -57,9 +61,49 @@ final class ShelfStore {
 
     private func searchMatches(_ item: ShelfItem) -> Bool {
         let search = searchText.lowercased()
-        if item.url.lastPathComponent.lowercased().contains(search) { return true }
-        // Quick check: if file name matches, no need for OCR lookup
+        let name = item.url.lastPathComponent
+        if name.lowercased().contains(search) { return true }
+        // Full-text: match against cached OCR text if we've recognized it.
+        if let text = ocrCache[name], text.lowercased().contains(search) { return true }
         return false
+    }
+
+    /// Lazily OCR any shelf items we haven't recognized yet, so full-text search
+    /// can match their contents. Runs off-main, caches, and re-notifies as results
+    /// land (only while a search is still active).
+    private func ensureOCRForSearch() {
+        guard !searchText.isEmpty else { return }
+        for item in items {
+            let name = item.url.lastPathComponent
+            if ocrCache[name] != nil || ocrInFlight.contains(name) { continue }
+            ocrInFlight.insert(name)
+            recognizeText(at: item.url) { [weak self] text in
+                guard let self else { return }
+                self.ocrInFlight.remove(name)
+                self.ocrCache[name] = text
+                UserDefaults.standard.set(self.ocrCache, forKey: "LedgeOCRText")
+                if !self.searchText.isEmpty { self.notifyFilterChanged() }
+            }
+        }
+    }
+
+    /// Vision text recognition for an image URL. Completion on main with the
+    /// recognized text (empty string if none / unreadable).
+    private func recognizeText(at url: URL, completion: @escaping (String) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+                DispatchQueue.main.async { completion("") }; return
+            }
+            let req = VNRecognizeTextRequest()
+            req.recognitionLevel = .accurate
+            req.usesLanguageCorrection = true
+            try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
+            let text = (req.results ?? [])
+                .compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: "\n")
+            DispatchQueue.main.async { completion(text) }
+        }
     }
 
     private func notifyFilterChanged() {
@@ -232,27 +276,17 @@ final class ShelfStore {
 
     func copyText(of item: ShelfItem, completion: @escaping (Bool) -> Void) {
         let url = item.url
-        DispatchQueue.global(qos: .userInitiated).async {
-            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-                DispatchQueue.main.async { completion(false) }; return
-            }
-            let req = VNRecognizeTextRequest()
-            req.recognitionLevel = .accurate
-            req.usesLanguageCorrection = true
-            try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
-            let text = (req.results ?? [])
-                .compactMap { $0.topCandidates(1).first?.string }
-                .joined(separator: "\n")
-            DispatchQueue.main.async {
-                guard !text.isEmpty else { completion(false); return }
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                pb.setString(text, forType: .string)
-                ClipboardWatcher.shared.ignoreChange(pb.changeCount)
-                NSLog("Ledge: OCR copied \(text.count) chars from \(url.lastPathComponent)")
-                completion(true)
-            }
+        recognizeText(at: url) { [weak self] text in
+            // Warm the search cache while we're here.
+            self?.ocrCache[url.lastPathComponent] = text
+            UserDefaults.standard.set(self?.ocrCache, forKey: "LedgeOCRText")
+            guard !text.isEmpty else { completion(false); return }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            ClipboardWatcher.shared.ignoreChange(pb.changeCount)
+            NSLog("Ledge: OCR copied \(text.count) chars from \(url.lastPathComponent)")
+            completion(true)
         }
     }
 

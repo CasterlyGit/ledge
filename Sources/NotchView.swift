@@ -27,6 +27,8 @@ final class NotchView: NSView {
     // Search/filter
     private let searchField = NSSearchField()
     private var searchTimer: Timer?
+    private let filterSeg = NSSegmentedControl(labels: ["All", "Today", "Pinned"],
+                                               trackingMode: .selectOne, target: nil, action: nil)
 
     init(frame: NSRect, topHeight: CGFloat) {
         self.topHeight = topHeight
@@ -166,10 +168,28 @@ final class NotchView: NSView {
         searchField.target = self
         searchField.action = #selector(updateSearch)
         addSubview(searchField)
+
+        filterSeg.segmentStyle = .rounded
+        filterSeg.font = .systemFont(ofSize: 10)
+        filterSeg.selectedSegment = 0
+        filterSeg.alphaValue = 0
+        filterSeg.target = self
+        filterSeg.action = #selector(updateFilter)
+        addSubview(filterSeg)
     }
 
     @objc private func updateSearch() {
         ShelfStore.shared.searchText = searchField.stringValue
+        reloadRail()
+    }
+
+    @objc private func updateFilter() {
+        let store = ShelfStore.shared
+        switch filterSeg.selectedSegment {
+        case 1:  store.dateFilter = .today; store.showPinnedOnly = false
+        case 2:  store.dateFilter = .all;   store.showPinnedOnly = true
+        default: store.dateFilter = .all;   store.showPinnedOnly = false
+        }
         reloadRail()
     }
 
@@ -210,8 +230,12 @@ final class NotchView: NSView {
         let railH = max(0, bounds.height - topHeight - pad - 8 - searchH)
         railScroll.frame = NSRect(x: pad + 8, y: pad + searchH,
                                   width: max(0, bounds.width - 2 * (pad + 8)), height: railH)
-        searchField.frame = NSRect(x: pad + 8, y: bounds.height - topHeight - 18,
-                                   width: bounds.width - 2 * (pad + 8), height: 20)
+        let rowY = bounds.height - topHeight - 18
+        let rowW = bounds.width - 2 * (pad + 8)
+        let segW: CGFloat = 168, segGap: CGFloat = 8
+        searchField.frame = NSRect(x: pad + 8, y: rowY,
+                                   width: max(0, rowW - segW - segGap), height: 20)
+        filterSeg.frame = NSRect(x: pad + 8 + rowW - segW, y: rowY, width: segW, height: 20)
         emptyLabel.sizeToFit()
         emptyLabel.frame.origin = NSPoint(x: bounds.midX - emptyLabel.frame.width / 2,
                                           y: pad + railH / 2 - emptyLabel.frame.height / 2)
@@ -241,6 +265,7 @@ final class NotchView: NSView {
         countLabel.animator().alphaValue = (visible && !empty) ? 1 : 0
         hintLabel.animator().alphaValue = (visible && !empty) ? 1 : 0
         searchField.animator().alphaValue = visible ? 1 : 0
+        filterSeg.animator().alphaValue = (visible && !empty) ? 1 : 0
         if visible { searchField.becomeFirstResponder() }
     }
 
@@ -257,6 +282,7 @@ final class NotchView: NSView {
         let f = filtered.count
         let pins = ShelfStore.shared.pinnedCount
         let hasFilter = !ShelfStore.shared.searchText.isEmpty || ShelfStore.shared.showPinnedOnly
+            || ShelfStore.shared.dateFilter != .all
         countLabel.stringValue = n == 0 ? "" :
             (hasFilter ? "\(f)/\(n)" : (pins > 0 ? "\(n) · \(pins) pinned" : "\(n) item\(n == 1 ? "" : "s")"))
         needsLayout = true
