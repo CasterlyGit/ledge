@@ -526,8 +526,18 @@ final class ShelfItemView: NSView, NSDraggingSource {
         }
         let bytes = (try? item.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-        return [item.url.lastPathComponent, dims, size].filter { !$0.isEmpty }.joined(separator: "  ·  ")
+        let when = Self.relativeFormatter.localizedString(for: item.date, relativeTo: Date())
+        // AI tag, if we've analyzed this one (e.g. "error", "code")
+        let tag = ImageAnalyzer.shared.cachedTag(for: item)?.tags.first.map { "#\($0)" } ?? ""
+        return [item.url.lastPathComponent, dims, size, when, tag]
+            .filter { !$0.isEmpty }.joined(separator: "  ·  ")
     }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
 
     // MARK: click vs drag
 
