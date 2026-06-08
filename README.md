@@ -1,13 +1,13 @@
-# ledge
+# ledge — Level Up Edition
 
-A sleek, Apple-style black notch that lives at the top of every display — and holds your screenshots.
+A sleek, Apple-style black notch that lives at the top of every display — and holds your screenshots. Now with voice integration, smart search, and AI-powered tagging.
 
-![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black) ![Swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![v0.1.0](https://img.shields.io/badge/release-v0.1.0-4dd9ff) ![MIT](https://img.shields.io/badge/license-MIT-green)
+![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black) ![Swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![v0.2.0-beta](https://img.shields.io/badge/release-v0.2.0--beta-4dd9ff) ![MIT](https://img.shields.io/badge/license-MIT-green)
 
-**Status: live** — running as a LaunchAgent, shelving screenshots since day one.
+**Status: live** — running as a LaunchAgent, shelving screenshots + voice commands.
 **[→ interactive demo](https://casterlygit.github.io/ledge/)**
 
-Native AppKit, zero dependencies, zero TCC prompts. One binary, ~700 lines of Swift.
+Native AppKit, zero dependencies, zero TCC prompts. One binary, ~950 lines of Swift. **Segment 3: Complete.**
 
 ## What it does
 
@@ -24,6 +24,24 @@ Native AppKit, zero dependencies, zero TCC prompts. One binary, ~700 lines of Sw
 - **Share** — right-click → Share… → AirDrop / Messages / Mail / anything in the system share sheet.
 - **Live count** — expanded band shows `N items · M pinned` on the right, interaction hints on the left.
 - **Right-click** — per-item: Copy / Copy Text (OCR) / Open / Pin / Share… / Reveal in Finder / Delete. On the notch: Open Shelf Folder / Clear All (keeps pinned) / Quit.
+
+## Level-Up Features (Segment 3)
+
+### Level 1: Voice Integration
+- **Dictation status** — when ⌃3 (push-to-talk) or voice input is active, the notch auto-lifts from minimized to visible and shows a spinning "Listening" indicator with cyan text. Smooth 180ms fade animations.
+- **Voice input bridge** — `com.casterly.ledge.status` notifications from laptop-dictation trigger the UI state changes. Works with the Caster organism's voice pipeline.
+- **Auto-collapse** — status clears (0.6s delay) when voice input ends, notch returns to minimized unless hovered.
+
+### Level 2: Search & Filter
+- **Live search field** — when shelf is expanded, a search field appears below the notch strip. Type to instantly filter by filename or text.
+- **Filter indicators** — expanded band shows filtered count as "X/Y items" when searching or tag-filtering. Helps you understand how many items match your query.
+- **Reset gestures** — clear search box to show all again, or use smart filters (coming from Level 3).
+
+### Level 3: Smart Shelf
+- **AI-powered tagging** — `ImageAnalyzer` examines each shelf item and auto-tags it: `screenshot`, `error`, `code`, `chart`, `message`. Tags are cached persistently in UserDefaults.
+- **Tag-based filtering** — filter shelf to show only items matching a tag. Compose with search + pinned filters.
+- **Voice-triggered smart search** — `ShelfStore.smartFilter()` interprets voice commands like "find errors" (shows only error screens) or "show charts" (filtered to data viz).
+- **Quick tag lookup** — `ImageAnalyzer.cachedTag(for:)` and `itemsWithTag(_:)` enable instant tag-based queries without re-analysis.
 
 ## Numbers
 
@@ -63,13 +81,33 @@ DistributedNotificationCenter.default().postNotificationName(
   userInfo: nil, deliverImmediately: true)' | swift -
 ```
 
+## Architecture — Level-Up Edition
+
+**New files:**
+- `ImageAnalyzer.swift` — AI tagging engine with Claude Vision API hook (currently heuristic; ready for API integration)
+- `NotchView.swift` — updated with search field, filter UI, status display coordination
+- `ShelfStore.swift` — extended with filteredItems, tag filters, smart search
+
+**Key integration points:**
+- `NotchController.setStatus(_:)` — routes voice state changes to visual indicators
+- `ShelfStore.smartFilter(_:)` — interprets voice commands ("find errors", "show charts", etc.)
+- `ImageAnalyzer.analyzeImage(_:completion:)` — off-main image analysis with caching
+- `AppDelegate` — listens for `com.casterly.ledge.status` notifications from voice input
+
 ## Roadmap
 
+### Planned (v0.2)
+- [ ] Claude Vision API integration — replace heuristic tagging with actual image analysis
+- [ ] Voice command shortcuts — "find errors", "copy latest", "clear all" via curby-dispatch
+- [ ] Collections — group filtered items by auto-detected category or date range
+- [ ] Metadata export — save selected items to markdown/HTML
 - [ ] Screen-recording (`.mov`) thumbnails via AVFoundation
+
+### Eventual
 - [ ] Vertical scroll wheel → horizontal rail scroll
-- [ ] Pin/favorite items that survive the 40-item prune
 - [ ] Drag-session smoke tests via synthesized CGEvents
 - [ ] Multi-select drag (band-select tiles, drag as a group)
+- [ ] Shelf sync (iCloud / Caster bus)
 
 ## Uninstall
 
