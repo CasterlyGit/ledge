@@ -25,6 +25,47 @@ final class ShelfStore {
     private var thumbCache: [URL: NSImage] = [:]
     private var pinnedNames: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "LedgePinned") ?? [])
 
+    // Search & filter state
+    var searchText: String = "" { didSet { notifyFilterChanged() } }
+    enum DateFilter { case all, today, week }
+    var dateFilter: DateFilter = .all { didSet { notifyFilterChanged() } }
+    var showPinnedOnly: Bool = false { didSet { notifyFilterChanged() } }
+    var tagFilter: String? { didSet { notifyFilterChanged() } }  // nil = all, "error" = only errors, etc.
+
+    var filteredItems: [ShelfItem] {
+        var result = items
+        if showPinnedOnly { result = result.filter { isPinned($0) } }
+        if dateFilter != .all { result = filterByDate(result, filter: dateFilter) }
+        if let tag = tagFilter { result = result.filter { item in
+            ImageAnalyzer.shared.cachedTag(for: item)?.tags.contains(tag) == true
+        } }
+        if !searchText.isEmpty { result = result.filter { searchMatches($0) } }
+        return result
+    }
+
+    private func filterByDate(_ items: [ShelfItem], filter: DateFilter) -> [ShelfItem] {
+        let now = Date()
+        let cal = Calendar.current
+        return items.filter { item in
+            switch filter {
+            case .all: return true
+            case .today: return cal.isDateInToday(item.date)
+            case .week: return now.timeIntervalSince(item.date) < 7 * 86400
+            }
+        }
+    }
+
+    private func searchMatches(_ item: ShelfItem) -> Bool {
+        let search = searchText.lowercased()
+        if item.url.lastPathComponent.lowercased().contains(search) { return true }
+        // Quick check: if file name matches, no need for OCR lookup
+        return false
+    }
+
+    private func notifyFilterChanged() {
+        NotificationCenter.default.post(name: .shelfChanged, object: nil)
+    }
+
     private let nameFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
@@ -114,6 +155,8 @@ final class ShelfStore {
         prune()
         if toClipboard { copyToPasteboard(item) }
         NSLog("Ledge: shelved \(url.lastPathComponent)")
+        // Auto-analyze for tags (off-main, cached)
+        ImageAnalyzer.shared.analyzeImage(item) { _ in }
         NotificationCenter.default.post(name: .shelfChanged, object: nil, userInfo: ["added": true])
         return item
     }
@@ -223,5 +266,25 @@ final class ShelfStore {
             i += 1
         }
         return candidate
+    }
+
+    // MARK: Smart search — voice-triggered quick actions
+
+    /// Apply a smart filter based on a voice query. "find errors", "show charts", etc.
+    func smartFilter(query: String) {
+        let q = query.lowercased()
+        if q.contains("error") || q.contains("fail") { tagFilter = "error"; searchText = "" }
+        else if q.contains("chart") || q.contains("graph") { tagFilter = "chart"; searchText = "" }
+        else if q.contains("code") { tagFilter = "code"; searchText = "" }
+        else if q.contains("message") || q.contains("chat") { tagFilter = "message"; searchText = "" }
+        else if q.contains("clear") || q.contains("reset") { tagFilter = nil; searchText = "" }
+        else { searchText = q; tagFilter = nil }
+    }
+
+    /// Get the latest screenshot of a given type.
+    func latestWithTag(_ tag: String) -> ShelfItem? {
+        items.first { item in
+            ImageAnalyzer.shared.cachedTag(for: item)?.tags.contains(tag) == true
+        }
     }
 }

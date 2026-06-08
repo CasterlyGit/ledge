@@ -24,6 +24,10 @@ final class NotchView: NSView {
     private let statusLabel = NSTextField(labelWithString: "")
     private var statusActive = false
 
+    // Search/filter
+    private let searchField = NSSearchField()
+    private var searchTimer: Timer?
+
     init(frame: NSRect, topHeight: CGFloat) {
         self.topHeight = topHeight
         super.init(frame: frame)
@@ -33,6 +37,7 @@ final class NotchView: NSView {
         registerForDraggedTypes(types)
         setupRail()
         setupStatus()
+        setupSearch()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -151,6 +156,23 @@ final class NotchView: NSView {
         addSubview(statusLabel)
     }
 
+    // MARK: search field
+
+    private func setupSearch() {
+        searchField.placeholderString = "Search shelf"
+        searchField.font = .systemFont(ofSize: 11)
+        searchField.bezelStyle = .roundedBezel
+        searchField.alphaValue = 0
+        searchField.target = self
+        searchField.action = #selector(updateSearch)
+        addSubview(searchField)
+    }
+
+    @objc private func updateSearch() {
+        ShelfStore.shared.searchText = searchField.stringValue
+        reloadRail()
+    }
+
     /// Show a one-word HUD in the notch strip: "listening" → spinner + "Listening",
     /// "transcribing" → "Transcribing…", anything else → hide. Never expands the gallery.
     func setStatus(_ state: String) {
@@ -184,9 +206,12 @@ final class NotchView: NSView {
     override func layout() {
         super.layout()
         let pad: CGFloat = 14
-        let railH = max(0, bounds.height - topHeight - pad - 8)
-        railScroll.frame = NSRect(x: pad + 8, y: pad,
+        let searchH: CGFloat = expanded && ShelfStore.shared.items.count > 0 ? 24 : 0
+        let railH = max(0, bounds.height - topHeight - pad - 8 - searchH)
+        railScroll.frame = NSRect(x: pad + 8, y: pad + searchH,
                                   width: max(0, bounds.width - 2 * (pad + 8)), height: railH)
+        searchField.frame = NSRect(x: pad + 8, y: bounds.height - topHeight - 18,
+                                   width: bounds.width - 2 * (pad + 8), height: 20)
         emptyLabel.sizeToFit()
         emptyLabel.frame.origin = NSPoint(x: bounds.midX - emptyLabel.frame.width / 2,
                                           y: pad + railH / 2 - emptyLabel.frame.height / 2)
@@ -215,6 +240,8 @@ final class NotchView: NSView {
         emptyLabel.animator().alphaValue = (visible && empty) ? 1 : 0
         countLabel.animator().alphaValue = (visible && !empty) ? 1 : 0
         hintLabel.animator().alphaValue = (visible && !empty) ? 1 : 0
+        searchField.animator().alphaValue = visible ? 1 : 0
+        if visible { searchField.becomeFirstResponder() }
     }
 
     func reloadRail() {
@@ -222,18 +249,21 @@ final class NotchView: NSView {
             railStack.removeArrangedSubview($0)
             $0.removeFromSuperview()
         }
-        for item in ShelfStore.shared.items {
+        let filtered = ShelfStore.shared.filteredItems
+        for item in filtered {
             railStack.addArrangedSubview(ShelfItemView(item: item))
         }
         let n = ShelfStore.shared.items.count
+        let f = filtered.count
         let pins = ShelfStore.shared.pinnedCount
+        let hasFilter = !ShelfStore.shared.searchText.isEmpty || ShelfStore.shared.showPinnedOnly
         countLabel.stringValue = n == 0 ? "" :
-            (pins > 0 ? "\(n) · \(pins) pinned" : "\(n) item\(n == 1 ? "" : "s")")
+            (hasFilter ? "\(f)/\(n)" : (pins > 0 ? "\(n) · \(pins) pinned" : "\(n) item\(n == 1 ? "" : "s")"))
         needsLayout = true
         if expanded {
-            emptyLabel.alphaValue = n == 0 ? 1 : 0
-            countLabel.alphaValue = n == 0 ? 0 : 1
-            hintLabel.alphaValue = n == 0 ? 0 : 1
+            emptyLabel.alphaValue = (n == 0 || f == 0) ? 1 : 0
+            countLabel.alphaValue = (n == 0 || f == 0) ? 0 : 1
+            hintLabel.alphaValue = (n == 0 || f == 0) ? 0 : 1
         }
         railScroll.contentView.scroll(to: .zero)
         railScroll.reflectScrolledClipView(railScroll.contentView)
